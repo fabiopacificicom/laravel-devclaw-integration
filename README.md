@@ -206,7 +206,77 @@ Platform statistics.
 
 ---
 
-## Using DevClawClient
+## Tool Execution
+
+When `POST /api/devclaw/tools/{tool}` is called, the package resolves and calls the actual tool implementation in your host app — it never falls back to asking the LLM to "execute" it verbally.
+
+### How the package finds your tool handler
+
+Resolution happens in this order:
+
+1. **`devclaw.platform_tools` container binding** — if your `AppServiceProvider` binds this key, that instance is used first.
+2. **`App\Services\AgentToolHandler`** — if this class exists it is resolved via the container.
+3. **`App\Services\ToolHandler`** — same.
+4. **`App\Http\Controllers\Admin\AgentController`** — same.
+
+Once a handler is found, the executor tries to call the tool in this order:
+
+1. `$handler->executeTool($toolName, $arguments)` — universal dispatcher method.
+2. `$handler->{$toolName}($arguments)` — method named after the tool.
+3. The container tries to resolve `$toolName` as an invokable class.
+
+If none of the above succeeds, a `\RuntimeException` is thrown and the endpoint returns HTTP 500 with a clear error message.
+
+### Manually binding a custom executor
+
+You can bind your own implementation of the executor in `AppServiceProvider`:
+
+```php
+// app/Providers/AppServiceProvider.php
+
+use Pacificdev\DevClaw\Services\ToolExecutor;
+
+public function register(): void
+{
+    // Bind a custom platform_tools handler
+    $this->app->singleton('devclaw.platform_tools', fn () => new MyCustomToolHandler());
+
+    // — OR — replace the ToolExecutor entirely
+    $this->app->singleton('devclaw.tool_executor', function ($app) {
+        return new class($app) extends ToolExecutor {
+            public function execute(string $toolName, mixed $arguments): mixed
+            {
+                // your custom dispatch logic
+            }
+        };
+    });
+}
+```
+
+### Using the auto-discovery (recommended)
+
+Simply create `App\Services\AgentToolHandler` with an `executeTool` method:
+
+```php
+namespace App\Services;
+
+class AgentToolHandler
+{
+    public function executeTool(string $tool, mixed $arguments): mixed
+    {
+        return match ($tool) {
+            'get_courses' => $this->getCourses($arguments),
+            default       => throw new \RuntimeException("Unknown tool: {$tool}"),
+        };
+    }
+}
+```
+
+No extra binding needed — the package finds it automatically.
+
+---
+
+
 
 The package ships a `DevClawClient` PHP class you can use in external projects:
 

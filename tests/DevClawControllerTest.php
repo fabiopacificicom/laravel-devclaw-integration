@@ -80,6 +80,56 @@ class DevClawControllerTest extends TestCase
     }
 
     // -----------------------------------------------------------------------
+    // Tool execution
+    // -----------------------------------------------------------------------
+
+    public function test_execute_tool_calls_executor_not_llm(): void
+    {
+        // Mock executor that returns a real result
+        $mockExecutor = new class {
+            public function execute(string $tool, mixed $args): array
+            {
+                return ['called' => $tool, 'args' => $args];
+            }
+        };
+
+        $this->app->instance('devclaw.tool_executor', $mockExecutor);
+
+        $response = $this->withToken('test-token-abc123')
+            ->postJson('/api/devclaw/tools/get_courses', ['status' => 'published']);
+
+        $response->assertStatus(200)
+            ->assertJson([
+                'tool'   => 'get_courses',
+                'result' => ['called' => 'get_courses', 'args' => ['status' => 'published']],
+            ]);
+    }
+
+    public function test_execute_tool_returns_500_when_tool_unresolvable(): void
+    {
+        // Bind an executor that always throws (simulates no handler found)
+        $mockExecutor = new class {
+            public function execute(string $tool, mixed $args): never
+            {
+                throw new \RuntimeException("ToolExecutor: could not resolve a tool handler for tool '{$tool}'.");
+            }
+        };
+
+        $this->app->instance('devclaw.tool_executor', $mockExecutor);
+
+        $response = $this->withToken('test-token-abc123')
+            ->postJson('/api/devclaw/tools/nonexistent_tool', []);
+
+        $response->assertStatus(500)
+            ->assertJsonStructure(['error']);
+
+        // Must NOT be an LLM "Execute tool:" response
+        $body = $response->json('error');
+        $this->assertStringNotContainsStringIgnoringCase('getAdminResponse', $body);
+        $this->assertStringNotContainsStringIgnoringCase('AI provider', $body);
+    }
+
+    // -----------------------------------------------------------------------
     // Chat
     // -----------------------------------------------------------------------
 

@@ -13,6 +13,10 @@ class DevClawServiceProvider extends ServiceProvider
             __DIR__ . '/config/devclaw.php',
             'devclaw'
         );
+
+        $this->app->singleton('devclaw.tool_executor', function ($app) {
+            return new \Pacificdev\DevClaw\Services\ToolExecutor($app);
+        });
     }
 
     public function boot(): void

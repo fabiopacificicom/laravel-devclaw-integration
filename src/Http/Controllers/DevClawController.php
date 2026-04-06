@@ -119,23 +119,8 @@ class DevClawController extends Controller
         $arguments = $request->all();
 
         try {
-            // Attempt to call a named function on the host app if available
-            // The host app should bind 'devclaw.tool_executor' or similar
-            if (app()->bound('devclaw.tool_executor')) {
-                $executor = app('devclaw.tool_executor');
-                $result = $executor->execute($tool, $arguments);
-                return response()->json(['tool' => $tool, 'result' => $result]);
-            }
-
-            // Fallback: try calling via AiProviderWrapper with a tool-call message
-            $ai = $this->resolveAiProvider();
-            $result = $ai->getAdminResponse(
-                "Execute tool: {$tool}",
-                ['tool_call' => ['name' => $tool, 'arguments' => $arguments]],
-                [],
-                null
-            );
-
+            $executor = app('devclaw.tool_executor');
+            $result = $executor->execute($tool, $arguments);
             return response()->json(['tool' => $tool, 'result' => $result]);
         } catch (\Throwable $e) {
             Log::error("DevClaw tool execution error [{$tool}]", ['error' => $e->getMessage()]);
