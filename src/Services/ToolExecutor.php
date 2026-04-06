@@ -32,7 +32,7 @@ class ToolExecutor
      */
     public function execute(string $toolName, mixed $arguments): mixed
     {
-        // Verify the tool exists in functions.json (soft check — warn but proceed)
+        // Verify the tool exists in functions.json — throws if file exists but tool is not declared
         $this->assertToolKnown($toolName);
 
         $handler = $this->resolveHandler();
@@ -117,7 +117,7 @@ class ToolExecutor
      */
     private function assertToolKnown(string $toolName): void
     {
-        $path = app_path('Services/functions.json');
+        $path = $this->app->basePath('app/Services/functions.json');
 
         if (!file_exists($path)) {
             // functions.json is optional — the host app may not have one yet
