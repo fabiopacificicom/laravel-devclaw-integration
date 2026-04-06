@@ -132,7 +132,7 @@ class DevClawController extends Controller
      * GET /api/devclaw/courses
      * List courses (read-only). Requires the host app to have a Course model.
      */
-    public function courses(): JsonResponse
+    public function courses(Request $request): JsonResponse
     {
         try {
             // Try common course model namespaces
@@ -142,9 +142,15 @@ class DevClawController extends Controller
                 return response()->json(['error' => 'Course model not found in this application.'], 404);
             }
 
-            $courses = $courseModel::select(['id', 'title', 'slug', 'status', 'created_at'])
-                ->orderBy('created_at', 'desc')
-                ->get();
+            $query = $courseModel::select(['id', 'title', 'slug', 'status', 'is_active', 'created_at'])
+                ->orderBy('created_at', 'desc');
+
+            // Optional filter: ?public_only=true returns only publicly visible courses
+            if ($request->boolean('public_only')) {
+                $query->where('is_active', true);
+            }
+
+            $courses = $query->get();
 
             return response()->json(['courses' => $courses]);
         } catch (\Throwable $e) {
