@@ -144,10 +144,26 @@ class DevClawController extends Controller
             'message'         => 'required|string|max:32768',
             'conversation_id' => 'sometimes|nullable|integer',
             'model'           => 'sometimes|nullable|string',
+            'tools'           => 'sometimes|array',
         ]);
 
         $message = $request->input('message');
         $model   = $request->input('model');
+
+        // Build page context — mirror what the admin chat UI sends
+        // so the AI provider knows which tools are available
+        $toolsList = $request->input('tools', $this->getDefaultTools());
+        $context = [
+            'page_type'        => 'admin_chat',
+            'tools'            => $toolsList,
+            'current_datetime' => now()->toDateTimeString(),
+            'timezone'         => config('app.timezone', 'UTC'),
+            'organization'     => [
+                'name'        => config('app.name'),
+                'environment' => app()->environment(),
+                'base_url'    => config('app.url'),
+            ],
+        ];
 
         try {
             $ai = $this->resolveAiProvider();
@@ -195,8 +211,8 @@ class DevClawController extends Controller
                 ->values()
                 ->all();
 
-            // Call AI with full history
-            $response = $ai->getAdminResponse($message, [], $history, $model);
+            // Call AI with full history and tools context
+            $response = $ai->getAdminResponse($message, $context, $history, $model);
 
             // Detect function_call in response
             $decoded = json_decode($response, true, 512, JSON_OBJECT_AS_ARRAY);
@@ -353,6 +369,17 @@ class DevClawController extends Controller
     // -----------------------------------------------------------------------
     // Private helpers
     // -----------------------------------------------------------------------
+
+    private function getDefaultTools(): array
+    {
+        // Return all tool names from functions.json as the default active set
+        $path = app()->basePath('app/Services/functions.json');
+        if (!file_exists($path)) {
+            return [];
+        }
+        $functions = json_decode(file_get_contents($path), true) ?? [];
+        return array_map(fn($f) => $f['name'] ?? ($f['function']['name'] ?? ''), $functions);
+    }
 
     private function resolveAiProvider(): mixed
     {
