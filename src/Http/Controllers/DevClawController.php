@@ -380,13 +380,20 @@ class DevClawController extends Controller
 
     private function getDefaultTools(): array
     {
-        // Return all tool names from functions.json as the default active set
         $path = app()->basePath('app/Services/functions.json');
         if (!file_exists($path)) {
             return [];
         }
-        $functions = json_decode(file_get_contents($path), true) ?? [];
-        return array_map(fn($f) => $f['name'] ?? ($f['function']['name'] ?? ''), $functions);
+        $data = json_decode(file_get_contents($path), true) ?? [];
+        // functions.json may be {'functions': [...]} or a plain array
+        $functions = isset($data['functions']) ? $data['functions'] : $data;
+        if (!is_array($functions)) {
+            return [];
+        }
+        return array_values(array_filter(
+            array_map(fn($f) => $f['name'] ?? ($f['function']['name'] ?? null), $functions),
+            fn($n) => is_string($n) && $n !== ''
+        ));
     }
 
     private function resolveAiProvider(): mixed
