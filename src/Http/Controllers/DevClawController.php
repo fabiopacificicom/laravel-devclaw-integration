@@ -150,8 +150,23 @@ class DevClawController extends Controller
         $message = $request->input('message');
         $model   = $request->input('model');
 
-        // Build page context — pass admin_chat page_type so the platform's system prompt activates
-        // Do NOT inject tools — the platform agent knows its own tools from its system prompt
+        // Resolve tool names to full OpenAI function schemas from functions.json
+        $toolsList = $request->input('tools', []);
+        if (!empty($toolsList)) {
+            $fnPath = app()->basePath('app/Services/functions.json');
+            if (file_exists($fnPath)) {
+                $fnData = json_decode(file_get_contents($fnPath), true) ?? [];
+                $allFns = isset($fnData['functions']) ? $fnData['functions'] : (is_array($fnData) ? $fnData : []);
+                $fnMap = [];
+                foreach ($allFns as $fn) {
+                    if (isset($fn['name'])) $fnMap[$fn['name']] = $fn;
+                }
+                $toolsList = array_values(array_filter(
+                    array_map(fn($t) => is_string($t) ? ($fnMap[$t] ?? null) : $t, $toolsList)
+                ));
+            }
+        }
+
         $context = [
             'page_type'        => 'admin_chat',
             'current_datetime' => now()->toDateTimeString(),
@@ -162,6 +177,9 @@ class DevClawController extends Controller
                 'base_url'    => config('app.url'),
             ],
         ];
+        if (!empty($toolsList)) {
+            $context['tools'] = $toolsList;
+        }
 
         try {
             $ai = $this->resolveAiProvider();
