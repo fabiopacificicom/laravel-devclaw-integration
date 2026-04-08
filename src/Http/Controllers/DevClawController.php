@@ -198,20 +198,28 @@ class DevClawController extends Controller
                 'is_ai'   => false,
             ]);
 
-            // Build conversation history (last 20 messages)
+            // Build conversation history — cap at 6 messages and 1000 chars each to avoid token overflow
             $history = $conversation->messages()
                 ->orderBy('created_at', 'desc')
-                ->take(20)
+                ->take(6)
                 ->get()
                 ->reverse()
                 ->map(fn($m) => [
                     'role'    => ($m->is_ai ?? false) ? 'assistant' : 'user',
-                    'content' => $m->content,
+                    'content' => mb_substr($m->content ?? '', 0, 1000),
                 ])
                 ->values()
                 ->all();
 
-            // Call AI with full history and tools context
+            // Ensure tools context is always set so the AI knows which function calls are available
+            if (empty($context['tools'])) {
+                $context['tools'] = $this->getDefaultTools();
+            }
+            if (empty($context['page_type'])) {
+                $context['page_type'] = 'admin_chat';
+            }
+
+            // Call AI with history and tools context
             $response = $ai->getAdminResponse($message, $context, $history, $model);
 
             // Detect function_call in response
