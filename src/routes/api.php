@@ -10,6 +10,10 @@ Route::prefix('api/devclaw')
         // Health check
         Route::get('health', [DevClawController::class, 'health']);
 
+        // Full agent loop (persists to AdminConversation, dispatches tool jobs)
+        Route::post('agent', [DevClawController::class, 'agent']);
+        Route::get('agent/{conversation_id}/status', [DevClawController::class, 'agentStatus']);
+
         // Send a message to the admin AI agent
         Route::post('chat', [DevClawController::class, 'chat']);
 

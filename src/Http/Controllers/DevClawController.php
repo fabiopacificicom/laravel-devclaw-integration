@@ -129,6 +129,162 @@ class DevClawController extends Controller
     }
 
     /**
+     * POST /api/devclaw/agent
+     * Full agent loop — persists messages to AdminConversation, detects function calls,
+     * dispatches HandleAgentFunctionCall job, and returns the result.
+     *
+     * Body:
+     *   message          (string, required)  — user message
+     *   conversation_id  (int, optional)     — attach to existing conversation (omit to create new)
+     *   model            (string, optional)  — AI model override
+     */
+    public function agent(Request $request): JsonResponse
+    {
+        $request->validate([
+            'message'         => 'required|string|max:32768',
+            'conversation_id' => 'sometimes|nullable|integer',
+            'model'           => 'sometimes|nullable|string',
+        ]);
+
+        $message = $request->input('message');
+        $model   = $request->input('model');
+
+        try {
+            $ai = $this->resolveAiProvider();
+
+            // Resolve or create AdminConversation
+            $convModel = $this->resolveModel(['App\\Models\\AdminConversation']);
+            $msgModel  = $this->resolveModel(['App\\Models\\AdminMessage']);
+
+            if (!$convModel || !$msgModel) {
+                // Fall back to simple chat if models not available
+                $response = $ai->getAdminResponse($message, [], [], $model);
+                return response()->json(['response' => $response, 'conversation_id' => null]);
+            }
+
+            // Get or create conversation
+            $convId = $request->input('conversation_id');
+            if ($convId) {
+                $conversation = $convModel::find($convId);
+            }
+            if (empty($conversation)) {
+                $conversation = $convModel::create([
+                    'source' => 'devclaw',
+                    'title'  => 'DevClaw Agent — ' . now()->format('Y-m-d H:i'),
+                ]);
+            }
+
+            // Persist user message
+            $msgModel::create([
+                'admin_conversation_id' => $conversation->id,
+                'role'    => 'user',
+                'content' => $message,
+                'is_ai'   => false,
+            ]);
+
+            // Build conversation history (last 20 messages)
+            $history = $conversation->messages()
+                ->orderBy('created_at', 'desc')
+                ->take(20)
+                ->get()
+                ->reverse()
+                ->map(fn($m) => [
+                    'role'    => ($m->is_ai ?? false) ? 'assistant' : 'user',
+                    'content' => $m->content,
+                ])
+                ->values()
+                ->all();
+
+            // Call AI with full history
+            $response = $ai->getAdminResponse($message, [], $history, $model);
+
+            // Detect function_call in response
+            $decoded = json_decode($response, true, 512, JSON_OBJECT_AS_ARRAY);
+            $isFunctionCall = json_last_error() === JSON_ERROR_NONE
+                && (isset($decoded['function_call']) || isset($decoded['name']));
+
+            if ($isFunctionCall) {
+                $payload = $decoded['function_call'] ?? $decoded;
+
+                // Dispatch the platform's HandleAgentFunctionCall job
+                $jobClass = 'App\\Jobs\\HandleAgentFunctionCall';
+                if (class_exists($jobClass)) {
+                    $jobClass::dispatch($conversation->id, $payload, $model, []);
+                    $statusMsg = 'Tool execution queued — check the conversation for results.';
+                } else {
+                    $statusMsg = 'Function call detected but HandleAgentFunctionCall job not found.';
+                }
+
+                $msgModel::create([
+                    'admin_conversation_id' => $conversation->id,
+                    'role'    => 'assistant',
+                    'content' => $statusMsg,
+                    'is_ai'   => true,
+                ]);
+
+                return response()->json([
+                    'response'        => $statusMsg,
+                    'function_call'   => $payload,
+                    'conversation_id' => $conversation->id,
+                    'queued'          => true,
+                ]);
+            }
+
+            // Normal text response — persist and return
+            $msgModel::create([
+                'admin_conversation_id' => $conversation->id,
+                'role'    => 'assistant',
+                'content' => $response,
+                'is_ai'   => true,
+            ]);
+
+            return response()->json([
+                'response'        => $response,
+                'conversation_id' => $conversation->id,
+                'queued'          => false,
+            ]);
+
+        } catch (\Throwable $e) {
+            Log::error('DevClaw agent error', ['error' => $e->getMessage()]);
+            return response()->json(['error' => 'Agent error: ' . $e->getMessage()], 500);
+        }
+    }
+
+    /**
+     * GET /api/devclaw/agent/{conversation_id}/status
+     * Poll the result of a queued agent tool call.
+     */
+    public function agentStatus(Request $request, int $conversationId): JsonResponse
+    {
+        $convModel = $this->resolveModel(['App\\Models\\AdminConversation']);
+        $msgModel  = $this->resolveModel(['App\\Models\\AdminMessage']);
+
+        if (!$convModel || !$msgModel) {
+            return response()->json(['error' => 'AdminConversation model not found.'], 404);
+        }
+
+        $conversation = $convModel::find($conversationId);
+        if (!$conversation) {
+            return response()->json(['error' => 'Conversation not found.'], 404);
+        }
+
+        // Return last N messages so caller can see tool output
+        $messages = $msgModel::where('admin_conversation_id', $conversationId)
+            ->orderBy('created_at', 'asc')
+            ->get(['role', 'content', 'is_ai', 'created_at'])
+            ->map(fn($m) => [
+                'role'    => ($m->is_ai ?? false) ? 'assistant' : 'user',
+                'content' => $m->content,
+                'time'    => $m->created_at,
+            ]);
+
+        return response()->json([
+            'conversation_id' => $conversationId,
+            'messages'        => $messages,
+        ]);
+    }
+
+    /**
      * GET /api/devclaw/courses
      * List courses (read-only). Requires the host app to have a Course model.
      */
