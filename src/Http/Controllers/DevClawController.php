@@ -150,25 +150,15 @@ class DevClawController extends Controller
         $message = $request->input('message');
         $model   = $request->input('model');
 
-        // Resolve tool names to full OpenAI function schemas from functions.json
-        $toolsList = $request->input('tools', []);
-        if (!empty($toolsList)) {
-            $fnPath = app()->basePath('app/Services/functions.json');
-            if (file_exists($fnPath)) {
-                $fnData = json_decode(file_get_contents($fnPath), true) ?? [];
-                $allFns = isset($fnData['functions']) ? $fnData['functions'] : (is_array($fnData) ? $fnData : []);
-                $fnMap = [];
-                foreach ($allFns as $fn) {
-                    if (isset($fn['name'])) $fnMap[$fn['name']] = $fn;
-                }
-                $toolsList = array_values(array_filter(
-                    array_map(fn($t) => is_string($t) ? ($fnMap[$t] ?? null) : $t, $toolsList)
-                ));
-            }
-        }
+        // Pass tool names as strings — OpenAIService resolves them to full schemas internally
+        $toolNames = array_values(array_filter(
+            array_map(fn($t) => is_string($t) ? $t : ($t['name'] ?? null), $request->input('tools', [])),
+            fn($t) => is_string($t) && $t !== ''
+        ));
 
         $context = [
             'page_type'        => 'admin_chat',
+            'tools'            => $toolNames,
             'current_datetime' => now()->toDateTimeString(),
             'timezone'         => config('app.timezone', 'UTC'),
             'organization'     => [
@@ -177,9 +167,6 @@ class DevClawController extends Controller
                 'base_url'    => config('app.url'),
             ],
         ];
-        if (!empty($toolsList)) {
-            $context['tools'] = $toolsList;
-        }
 
         try {
             $ai = $this->resolveAiProvider();
