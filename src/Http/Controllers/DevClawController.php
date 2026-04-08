@@ -150,12 +150,10 @@ class DevClawController extends Controller
         $message = $request->input('message');
         $model   = $request->input('model');
 
-        // Build page context — mirror what the admin chat UI sends
-        // so the AI provider knows which tools are available
-        $toolsList = $request->input('tools', $this->getDefaultTools());
+        // Build page context — pass admin_chat page_type so the platform's system prompt activates
+        // Do NOT inject tools — the platform agent knows its own tools from its system prompt
         $context = [
             'page_type'        => 'admin_chat',
-            'tools'            => $toolsList,
             'current_datetime' => now()->toDateTimeString(),
             'timezone'         => config('app.timezone', 'UTC'),
             'organization'     => [
@@ -211,15 +209,13 @@ class DevClawController extends Controller
                 ->values()
                 ->all();
 
-            // Ensure tools context is always set so the AI knows which function calls are available
-            if (empty($context['tools'])) {
-                $context['tools'] = $this->getDefaultTools();
-            }
+            // Ensure admin_chat page_type so the platform's system prompt activates tool-calling mode
             if (empty($context['page_type'])) {
                 $context['page_type'] = 'admin_chat';
             }
+            // Do not inject tools — the platform agent knows its own tools from its system prompt
 
-            // Call AI with history and tools context
+            // Call AI with history and context
             $response = $ai->getAdminResponse($message, $context, $history, $model);
 
             // Detect function_call in response
@@ -377,24 +373,6 @@ class DevClawController extends Controller
     // -----------------------------------------------------------------------
     // Private helpers
     // -----------------------------------------------------------------------
-
-    private function getDefaultTools(): array
-    {
-        $path = app()->basePath('app/Services/functions.json');
-        if (!file_exists($path)) {
-            return [];
-        }
-        $data = json_decode(file_get_contents($path), true) ?? [];
-        // functions.json may be {'functions': [...]} or a plain array
-        $functions = isset($data['functions']) ? $data['functions'] : $data;
-        if (!is_array($functions)) {
-            return [];
-        }
-        return array_values(array_filter(
-            array_map(fn($f) => $f['name'] ?? ($f['function']['name'] ?? null), $functions),
-            fn($n) => is_string($n) && $n !== ''
-        ));
-    }
 
     private function resolveAiProvider(): mixed
     {
