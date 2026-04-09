@@ -150,7 +150,23 @@ class DevClawController extends Controller
         $message = $request->input('message');
         $model   = $request->input('model');
 
-        // Pass tool names as strings — OpenAIService resolves them to full schemas internally
+        // Delegate to platform's AdminAgentController — full pipeline with snapshot + context
+        $platformUrl = rtrim(config('app.url', url('/')), '/') . '/api/admin-agent/message';
+        $token       = config('devclaw.token');
+
+        try {
+            $proxyResponse = \Illuminate\Support\Facades\Http::withToken($token)
+                ->timeout(60)
+                ->post($platformUrl, $request->only(['message', 'conversation_id', 'tools', 'model']));
+
+            if ($proxyResponse->ok() || $proxyResponse->clientError()) {
+                return response()->json($proxyResponse->json(), $proxyResponse->status());
+            }
+        } catch (\Throwable $proxyErr) {
+            Log::warning('DevClaw /agent proxy failed, falling back', ['error' => $proxyErr->getMessage()]);
+        }
+
+        // Fallback: direct implementation (no platform snapshot context)
         $toolNames = array_values(array_filter(
             array_map(fn($t) => is_string($t) ? $t : ($t['name'] ?? null), $request->input('tools', [])),
             fn($t) => is_string($t) && $t !== ''
@@ -281,6 +297,17 @@ class DevClawController extends Controller
      */
     public function agentStatus(Request $request, int $conversationId): JsonResponse
     {
+        // Proxy to platform's AdminAgentController
+        $platformUrl = rtrim(config('app.url', url('/')), '/') . "/api/admin-agent/{$conversationId}/status";
+        try {
+            $proxy = \Illuminate\Support\Facades\Http::withToken(config('devclaw.token'))
+                ->timeout(15)->get($platformUrl);
+            if ($proxy->ok() || $proxy->clientError()) {
+                return response()->json($proxy->json(), $proxy->status());
+            }
+        } catch (\Throwable $e) { /* fall through */ }
+
+        // Fallback
         $convModel = $this->resolveModel(['App\\Models\\AdminConversation']);
         $msgModel  = $this->resolveModel(['App\\Models\\AdminMessage']);
 
