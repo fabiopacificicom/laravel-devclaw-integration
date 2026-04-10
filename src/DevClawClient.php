@@ -65,6 +65,57 @@ class DevClawClient
     }
 
     /**
+     * Send a message through the full agent loop.
+     *
+     * Uses the exact same pipeline as the Admin UI (/admin/chat):
+     * - Same system prompt, context and platform snapshot
+     * - Same tool definitions from functions.json
+     * - Same HandleAgentFunctionCall job dispatch
+     * - Persists to AdminConversation / AdminMessage
+     *
+     * When the AI calls a tool the job is queued and the response will include
+     * `queued: true` plus a `conversation_id` you can poll with agentStatus().
+     *
+     * @param  string      $message         The user message
+     * @param  array       $tools           Active tool names (mirrors the Admin UI tool toggles)
+     * @param  int|null    $conversationId  Attach to an existing conversation, or omit to create a new one
+     * @param  string|null $model           AI model override
+     * @return array  ['response' => ..., 'conversation_id' => ..., 'queued' => bool, 'function_call'? => ...]
+     */
+    public function agent(
+        string $message,
+        array $tools = [],
+        ?int $conversationId = null,
+        ?string $model = null
+    ): array {
+        $payload = ['message' => $message, 'tools' => $tools];
+
+        if ($conversationId !== null) {
+            $payload['conversation_id'] = $conversationId;
+        }
+        if ($model !== null) {
+            $payload['model'] = $model;
+        }
+
+        $response = $this->http->post('agent', $payload);
+        $this->assertSuccess($response, 'agent');
+        return $response->json();
+    }
+
+    /**
+     * Poll the status / messages of an agent conversation.
+     *
+     * @param  int  $conversationId
+     * @return array  ['conversation_id' => ..., 'messages' => [...]]
+     */
+    public function agentStatus(int $conversationId): array
+    {
+        $response = $this->http->get("agent/{$conversationId}/status");
+        $this->assertSuccess($response, "agent/{$conversationId}/status");
+        return $response->json();
+    }
+
+    /**
      * List all available agent tools.
      *
      * @return array  ['tools' => [...]]

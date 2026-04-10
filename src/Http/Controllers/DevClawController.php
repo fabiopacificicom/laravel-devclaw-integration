@@ -130,138 +130,82 @@ class DevClawController extends Controller
 
     /**
      * POST /api/devclaw/agent
-     * Full agent loop — persists messages to AdminConversation, detects function calls,
-     * dispatches HandleAgentFunctionCall job, and returns the result.
+     * Full agent loop — delegates to the platform's AdminAgentController when available,
+     * which uses the exact same pipeline as the Admin UI (context building, tool list,
+     * HandleAgentFunctionCall dispatch, etc.).
      *
      * Body:
      *   message          (string, required)  — user message
      *   conversation_id  (int, optional)     — attach to existing conversation (omit to create new)
+     *   tools            (array, optional)   — active tool names (same as admin UI activeTools)
      *   model            (string, optional)  — AI model override
      */
     public function agent(Request $request): JsonResponse
     {
+        // Delegate to the platform's AdminAgentController so agent-to-agent communication
+        // uses the identical pipeline as the Admin UI — same context, same tool dispatch,
+        // same HandleAgentFunctionCall job. No duplication.
+        $platformController = 'App\\Http\\Controllers\\Api\\AdminAgentController';
+        if (app()->bound($platformController) || class_exists($platformController)) {
+            return app($platformController)->sendMessage($request);
+        }
+
+        // Fallback when the platform controller is not present (standalone / testing)
         $request->validate([
             'message'         => 'required|string|max:32768',
             'conversation_id' => 'sometimes|nullable|integer',
             'model'           => 'sometimes|nullable|string',
-            'tools'           => 'sometimes|array',
         ]);
-
-        $message = $request->input('message');
-        $model   = $request->input('model');
-
-        // Delegate to platform's AdminAgentController — full pipeline with snapshot + context
-        $platformUrl = rtrim(config('app.url', url('/')), '/') . '/api/admin-agent/message';
-        $token       = config('devclaw.token');
-
-        try {
-            $proxyResponse = \Illuminate\Support\Facades\Http::withToken($token)
-                ->timeout(60)
-                ->post($platformUrl, $request->only(['message', 'conversation_id', 'tools', 'model']));
-
-            if ($proxyResponse->ok() || $proxyResponse->clientError()) {
-                return response()->json($proxyResponse->json(), $proxyResponse->status());
-            }
-        } catch (\Throwable $proxyErr) {
-            Log::warning('DevClaw /agent proxy failed, falling back', ['error' => $proxyErr->getMessage()]);
-        }
-
-        // Fallback: direct implementation (no platform snapshot context)
-        $toolNames = array_values(array_filter(
-            array_map(fn($t) => is_string($t) ? $t : ($t['name'] ?? null), $request->input('tools', [])),
-            fn($t) => is_string($t) && $t !== ''
-        ));
-
-        $context = [
-            'page_type'        => 'admin_chat',
-            'tools'            => $toolNames,
-            'current_datetime' => now()->toDateTimeString(),
-            'timezone'         => config('app.timezone', 'UTC'),
-            'organization'     => [
-                'name'        => config('app.name'),
-                'environment' => app()->environment(),
-                'base_url'    => config('app.url'),
-            ],
-        ];
 
         try {
             $ai = $this->resolveAiProvider();
 
-            // Resolve or create AdminConversation
             $convModel = $this->resolveModel(['App\\Models\\AdminConversation']);
             $msgModel  = $this->resolveModel(['App\\Models\\AdminMessage']);
 
             if (!$convModel || !$msgModel) {
-                // Fall back to simple chat if models not available
-                $response = $ai->getAdminResponse($message, [], [], $model);
+                $response = $ai->getAdminResponse($request->input('message'), [], [], $request->input('model'));
                 return response()->json(['response' => $response, 'conversation_id' => null]);
             }
 
-            // Get or create conversation
             $convId = $request->input('conversation_id');
-            if ($convId) {
-                $conversation = $convModel::find($convId);
-            }
-            if (empty($conversation)) {
+            $conversation = $convId ? $convModel::find($convId) : null;
+            if (!$conversation) {
                 $conversation = $convModel::create([
                     'source' => 'devclaw',
                     'title'  => 'DevClaw Agent — ' . now()->format('Y-m-d H:i'),
                 ]);
             }
 
-            // Persist user message
             $msgModel::create([
                 'admin_conversation_id' => $conversation->id,
-                'role'    => 'user',
-                'content' => $message,
+                'content' => $request->input('message'),
                 'is_ai'   => false,
             ]);
 
-            // Build conversation history — cap at 6 messages and 1000 chars each to avoid token overflow
             $history = $conversation->messages()
                 ->orderBy('created_at', 'desc')
-                ->take(6)
+                ->take(20)
                 ->get()
                 ->reverse()
-                ->map(fn($m) => [
-                    'role'    => ($m->is_ai ?? false) ? 'assistant' : 'user',
-                    'content' => mb_substr($m->content ?? '', 0, 1000),
-                ])
+                ->map(fn($m) => ['role' => ($m->is_ai ?? false) ? 'assistant' : 'user', 'content' => $m->content])
                 ->values()
                 ->all();
 
-            // Ensure admin_chat page_type so the platform's system prompt activates tool-calling mode
-            if (empty($context['page_type'])) {
-                $context['page_type'] = 'admin_chat';
-            }
-            // Do not inject tools — the platform agent knows its own tools from its system prompt
+            $response = $ai->getAdminResponse($request->input('message'), [], $history, $request->input('model'));
 
-            // Call AI with history and context
-            $response = $ai->getAdminResponse($message, $context, $history, $model);
-
-            // Detect function_call in response
             $decoded = json_decode($response, true, 512, JSON_OBJECT_AS_ARRAY);
             $isFunctionCall = json_last_error() === JSON_ERROR_NONE
                 && (isset($decoded['function_call']) || isset($decoded['name']));
 
             if ($isFunctionCall) {
-                $payload = $decoded['function_call'] ?? $decoded;
-
-                // Dispatch the platform's HandleAgentFunctionCall job
+                $payload  = $decoded['function_call'] ?? $decoded;
                 $jobClass = 'App\\Jobs\\HandleAgentFunctionCall';
-                if (class_exists($jobClass)) {
-                    $jobClass::dispatch($conversation->id, $payload, $model, []);
-                    $statusMsg = 'Tool execution queued — check the conversation for results.';
-                } else {
-                    $statusMsg = 'Function call detected but HandleAgentFunctionCall job not found.';
-                }
+                $statusMsg = class_exists($jobClass)
+                    ? (fn() => $jobClass::dispatch($conversation->id, $payload, $request->input('model'), []) ?: 'Tool execution queued — check the conversation for results.')()
+                    : 'Function call detected but HandleAgentFunctionCall job not found.';
 
-                $msgModel::create([
-                    'admin_conversation_id' => $conversation->id,
-                    'role'    => 'assistant',
-                    'content' => $statusMsg,
-                    'is_ai'   => true,
-                ]);
+                $msgModel::create(['admin_conversation_id' => $conversation->id, 'content' => $statusMsg, 'is_ai' => true]);
 
                 return response()->json([
                     'response'        => $statusMsg,
@@ -271,13 +215,7 @@ class DevClawController extends Controller
                 ]);
             }
 
-            // Normal text response — persist and return
-            $msgModel::create([
-                'admin_conversation_id' => $conversation->id,
-                'role'    => 'assistant',
-                'content' => $response,
-                'is_ai'   => true,
-            ]);
+            $msgModel::create(['admin_conversation_id' => $conversation->id, 'content' => $response, 'is_ai' => true]);
 
             return response()->json([
                 'response'        => $response,
@@ -286,7 +224,7 @@ class DevClawController extends Controller
             ]);
 
         } catch (\Throwable $e) {
-            Log::error('DevClaw agent error', ['error' => $e->getMessage()]);
+            Log::error('DevClaw agent fallback error', ['error' => $e->getMessage()]);
             return response()->json(['error' => 'Agent error: ' . $e->getMessage()], 500);
         }
     }
@@ -294,18 +232,14 @@ class DevClawController extends Controller
     /**
      * GET /api/devclaw/agent/{conversation_id}/status
      * Poll the result of a queued agent tool call.
+     * Delegates to the platform's AdminAgentController when available.
      */
     public function agentStatus(Request $request, int $conversationId): JsonResponse
     {
-        // Proxy to platform's AdminAgentController
-        $platformUrl = rtrim(config('app.url', url('/')), '/') . "/api/admin-agent/{$conversationId}/status";
-        try {
-            $proxy = \Illuminate\Support\Facades\Http::withToken(config('devclaw.token'))
-                ->timeout(15)->get($platformUrl);
-            if ($proxy->ok() || $proxy->clientError()) {
-                return response()->json($proxy->json(), $proxy->status());
-            }
-        } catch (\Throwable $e) { /* fall through */ }
+        $platformController = 'App\\Http\\Controllers\\Api\\AdminAgentController';
+        if (app()->bound($platformController) || class_exists($platformController)) {
+            return app($platformController)->status($conversationId);
+        }
 
         // Fallback
         $convModel = $this->resolveModel(['App\\Models\\AdminConversation']);
@@ -320,7 +254,6 @@ class DevClawController extends Controller
             return response()->json(['error' => 'Conversation not found.'], 404);
         }
 
-        // Return last N messages so caller can see tool output
         $messages = $msgModel::where('admin_conversation_id', $conversationId)
             ->orderBy('created_at', 'asc')
             ->get(['role', 'content', 'is_ai', 'created_at'])

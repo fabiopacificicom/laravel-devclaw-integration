@@ -1,187 +1,182 @@
 <?php
 
-namespace Pacificdev\DevClaw\Tests;
+// -----------------------------------------------------------------------
+// Health
+// -----------------------------------------------------------------------
 
-use Orchestra\Testbench\TestCase;
-use Pacificdev\DevClaw\DevClawServiceProvider;
-use Illuminate\Foundation\Testing\RefreshDatabase;
+it('returns ok with valid token', function () {
+    $this->withToken('test-token-abc123')
+        ->getJson('/api/devclaw/health')
+        ->assertOk()
+        ->assertJson(['status' => 'ok']);
+});
 
-class DevClawControllerTest extends TestCase
-{
-    protected function getPackageProviders($app): array
-    {
-        return [DevClawServiceProvider::class];
-    }
+it('returns 401 without token on health', function () {
+    $this->getJson('/api/devclaw/health')
+        ->assertUnauthorized();
+});
 
-    protected function defineEnvironment($app): void
-    {
-        $app['config']->set('devclaw.enabled', true);
-        $app['config']->set('devclaw.token', 'test-token-abc123');
-        $app['config']->set('devclaw.log_requests', false);
-    }
+it('returns 401 with wrong token on health', function () {
+    $this->withToken('wrong-token')
+        ->getJson('/api/devclaw/health')
+        ->assertUnauthorized();
+});
 
-    // -----------------------------------------------------------------------
-    // Health
-    // -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
+// Auth middleware
+// -----------------------------------------------------------------------
 
-    public function test_health_returns_ok_with_valid_token(): void
-    {
-        $response = $this->withToken('test-token-abc123')
-            ->getJson('/api/devclaw/health');
+it('rejects missing authorization header', function () {
+    $this->getJson('/api/devclaw/stats')
+        ->assertUnauthorized()
+        ->assertJsonFragment(['error' => 'Unauthorized. Invalid or missing Bearer token.']);
+});
 
-        $response->assertStatus(200)
-            ->assertJson(['status' => 'ok']);
-    }
+it('rejects invalid token', function () {
+    $this->withToken('bad-token')
+        ->getJson('/api/devclaw/stats')
+        ->assertUnauthorized();
+});
 
-    public function test_health_returns_401_without_token(): void
-    {
-        $response = $this->getJson('/api/devclaw/health');
-        $response->assertStatus(401);
-    }
+// -----------------------------------------------------------------------
+// Tools
+// -----------------------------------------------------------------------
 
-    public function test_health_returns_401_with_wrong_token(): void
-    {
-        $response = $this->withToken('wrong-token')
-            ->getJson('/api/devclaw/health');
+it('returns 404 when functions.json is missing', function () {
+    $this->withToken('test-token-abc123')
+        ->getJson('/api/devclaw/tools')
+        ->assertNotFound();
+});
 
-        $response->assertStatus(401);
-    }
+// -----------------------------------------------------------------------
+// Tool execution
+// -----------------------------------------------------------------------
 
-    // -----------------------------------------------------------------------
-    // Auth middleware
-    // -----------------------------------------------------------------------
+it('calls executor directly — not the LLM', function () {
+    $mockExecutor = new class {
+        public function execute(string $tool, mixed $args): array
+        {
+            return ['called' => $tool, 'args' => $args];
+        }
+    };
 
-    public function test_middleware_rejects_missing_authorization_header(): void
-    {
-        $response = $this->getJson('/api/devclaw/stats');
-        $response->assertStatus(401)
-            ->assertJsonFragment(['error' => 'Unauthorized. Invalid or missing Bearer token.']);
-    }
+    app()->instance('devclaw.tool_executor', $mockExecutor);
 
-    public function test_middleware_rejects_invalid_token(): void
-    {
-        $response = $this->withToken('bad-token')
-            ->getJson('/api/devclaw/stats');
+    $this->withToken('test-token-abc123')
+        ->postJson('/api/devclaw/tools/get_courses', ['status' => 'published'])
+        ->assertOk()
+        ->assertJson([
+            'tool'   => 'get_courses',
+            'result' => ['called' => 'get_courses', 'args' => ['status' => 'published']],
+        ]);
+});
 
-        $response->assertStatus(401);
-    }
+it('returns 500 when tool handler is not resolvable', function () {
+    $mockExecutor = new class {
+        public function execute(string $tool, mixed $args): never
+        {
+            throw new \RuntimeException("ToolExecutor: could not resolve a tool handler for tool '{$tool}'.");
+        }
+    };
 
-    // -----------------------------------------------------------------------
-    // Tools
-    // -----------------------------------------------------------------------
+    app()->instance('devclaw.tool_executor', $mockExecutor);
 
-    public function test_tools_returns_404_when_functions_json_missing(): void
-    {
-        $response = $this->withToken('test-token-abc123')
-            ->getJson('/api/devclaw/tools');
+    $response = $this->withToken('test-token-abc123')
+        ->postJson('/api/devclaw/tools/nonexistent_tool', [])
+        ->assertStatus(500)
+        ->assertJsonStructure(['error']);
 
-        // In test environment functions.json won't exist
-        $response->assertStatus(404);
-    }
+    // Must NOT be an LLM "AI provider" error — the executor is called directly
+    $error = $response->json('error');
+    expect($error)
+        ->not->toContain('getAdminResponse');
+    expect(strtolower($error))
+        ->not->toContain('ai provider');
+});
 
-    // -----------------------------------------------------------------------
-    // Tool execution
-    // -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
+// Chat
+// -----------------------------------------------------------------------
 
-    public function test_execute_tool_calls_executor_not_llm(): void
-    {
-        // Mock executor that returns a real result
-        $mockExecutor = new class {
-            public function execute(string $tool, mixed $args): array
-            {
-                return ['called' => $tool, 'args' => $args];
-            }
-        };
+it('rejects chat request without message field', function () {
+    $this->withToken('test-token-abc123')
+        ->postJson('/api/devclaw/chat', [])
+        ->assertUnprocessable();
+});
 
-        $this->app->instance('devclaw.tool_executor', $mockExecutor);
+it('returns 500 for chat when AI provider is not bound', function () {
+    $this->withToken('test-token-abc123')
+        ->postJson('/api/devclaw/chat', ['message' => 'Hello'])
+        ->assertStatus(500)
+        ->assertJsonStructure(['error']);
+});
 
-        $response = $this->withToken('test-token-abc123')
-            ->postJson('/api/devclaw/tools/get_courses', ['status' => 'published']);
+// -----------------------------------------------------------------------
+// Agent — delegates to AdminAgentController when available
+// -----------------------------------------------------------------------
 
-        $response->assertStatus(200)
-            ->assertJson([
-                'tool'   => 'get_courses',
-                'result' => ['called' => 'get_courses', 'args' => ['status' => 'published']],
+it('rejects agent request without message field', function () {
+    $this->withToken('test-token-abc123')
+        ->postJson('/api/devclaw/agent', [])
+        ->assertUnprocessable();
+});
+
+it('uses AdminAgentController pipeline when available', function () {
+    // Bind a fake AdminAgentController into the container
+    $fake = new class {
+        public function sendMessage(\Illuminate\Http\Request $request): \Illuminate\Http\JsonResponse
+        {
+            return response()->json([
+                'response'        => 'delegated',
+                'conversation_id' => 99,
+                'queued'          => false,
             ]);
-    }
+        }
+    };
 
-    public function test_execute_tool_returns_500_when_tool_unresolvable(): void
-    {
-        // Bind an executor that always throws (simulates no handler found)
-        $mockExecutor = new class {
-            public function execute(string $tool, mixed $args): never
-            {
-                throw new \RuntimeException("ToolExecutor: could not resolve a tool handler for tool '{$tool}'.");
-            }
-        };
+    app()->bind('App\\Http\\Controllers\\Api\\AdminAgentController', fn () => $fake);
 
-        $this->app->instance('devclaw.tool_executor', $mockExecutor);
+    $this->withToken('test-token-abc123')
+        ->postJson('/api/devclaw/agent', ['message' => 'Hello agent'])
+        ->assertOk()
+        ->assertJson(['response' => 'delegated', 'conversation_id' => 99]);
+});
 
-        $response = $this->withToken('test-token-abc123')
-            ->postJson('/api/devclaw/tools/nonexistent_tool', []);
+it('falls back to inline handler when AdminAgentController is absent', function () {
+    // Ensure the platform controller class does NOT exist in this test environment
+    // (it won't exist in a bare Orchestra Testbench app)
+    expect(class_exists('App\\Http\\Controllers\\Api\\AdminAgentController'))->toBeFalse();
 
-        $response->assertStatus(500)
-            ->assertJsonStructure(['error']);
+    // With no AI provider bound, the fallback should return 500 (not crash differently)
+    $this->withToken('test-token-abc123')
+        ->postJson('/api/devclaw/agent', ['message' => 'Hello'])
+        ->assertStatus(500)
+        ->assertJsonStructure(['error']);
+});
 
-        // Must NOT be an LLM "Execute tool:" response
-        $body = $response->json('error');
-        $this->assertStringNotContainsStringIgnoringCase('getAdminResponse', $body);
-        $this->assertStringNotContainsStringIgnoringCase('AI provider', $body);
-    }
+// -----------------------------------------------------------------------
+// Stats
+// -----------------------------------------------------------------------
 
-    // -----------------------------------------------------------------------
-    // Chat
-    // -----------------------------------------------------------------------
+it('returns valid stats structure', function () {
+    $this->withToken('test-token-abc123')
+        ->getJson('/api/devclaw/stats')
+        ->assertOk()
+        ->assertJsonStructure([
+            'stats' => [
+                'php_version',
+                'laravel_version',
+                'timestamp',
+            ],
+        ]);
+});
 
-    public function test_chat_requires_message_field(): void
-    {
-        $response = $this->withToken('test-token-abc123')
-            ->postJson('/api/devclaw/chat', []);
+// -----------------------------------------------------------------------
+// Disabled state
+// -----------------------------------------------------------------------
 
-        $response->assertStatus(422);
-    }
+it('config disabled flag can be read', function () {
+    config(['devclaw.enabled' => false]);
 
-    public function test_chat_returns_error_when_ai_provider_not_bound(): void
-    {
-        $response = $this->withToken('test-token-abc123')
-            ->postJson('/api/devclaw/chat', ['message' => 'Hello']);
-
-        // Should be 500 since AiProviderWrapper isn't available in test env
-        $response->assertStatus(500)
-            ->assertJsonStructure(['error']);
-    }
-
-    // -----------------------------------------------------------------------
-    // Stats
-    // -----------------------------------------------------------------------
-
-    public function test_stats_returns_valid_structure(): void
-    {
-        $response = $this->withToken('test-token-abc123')
-            ->getJson('/api/devclaw/stats');
-
-        $response->assertStatus(200)
-            ->assertJsonStructure([
-                'stats' => [
-                    'php_version',
-                    'laravel_version',
-                    'timestamp',
-                ],
-            ]);
-    }
-
-    // -----------------------------------------------------------------------
-    // Disabled state
-    // -----------------------------------------------------------------------
-
-    public function test_routes_not_registered_when_disabled(): void
-    {
-        // Override config to disabled
-        config(['devclaw.enabled' => false]);
-
-        // Note: routes are registered at boot time, so this test
-        // validates the config value is respected. A full integration
-        // test would require a separate app boot cycle.
-        $this->assertFalse(config('devclaw.enabled'));
-    }
-}
+    expect(config('devclaw.enabled'))->toBeFalse();
+});
