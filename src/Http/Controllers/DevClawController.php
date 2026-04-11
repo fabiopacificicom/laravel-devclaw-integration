@@ -85,6 +85,11 @@ class DevClawController extends Controller
 
         $functions = json_decode(file_get_contents($path), true);
 
+        // Unwrap {"functions": [...]} wrapper if present
+        if (isset($functions['functions']) && is_array($functions['functions'])) {
+            $functions = $functions['functions'];
+        }
+
         // Filter by allowed_tools if configured
         $allowed = config('devclaw.allowed_tools', '*');
         if ($allowed !== '*') {
