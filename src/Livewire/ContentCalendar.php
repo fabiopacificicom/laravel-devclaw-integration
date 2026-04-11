@@ -25,7 +25,7 @@ class ContentCalendar extends Component
     {
         return [
             'editingEntry.title'        => 'required|string|max:255',
-            'editingEntry.type'         => 'required|in:post,course,workshop,video,linkedin,other',
+            'editingEntry.type'         => 'required|in:post,course,workshop,youtube_video,linkedin,other',
             'editingEntry.status'       => 'required|in:draft,scheduled,published,cancelled',
             'editingEntry.scheduled_at' => 'required|date',
             'editingEntry.color'        => 'nullable|string|max:7',

@@ -11,7 +11,7 @@ return new class extends Migration
         Schema::create('calendar_entries', function (Blueprint $table) {
             $table->id();
             $table->string('title', 255);
-            $table->enum('type', ['post', 'course', 'workshop', 'video', 'linkedin', 'other']);
+            $table->enum('type', ['post', 'course', 'workshop', 'youtube_video', 'linkedin', 'other']);
             $table->enum('status', ['draft', 'scheduled', 'published', 'cancelled'])->default('draft');
             $table->dateTime('scheduled_at')->index();
             $table->string('color', 7)->default('#3b82f6');
