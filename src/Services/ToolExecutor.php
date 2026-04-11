@@ -82,6 +82,15 @@ class ToolExecutor
     /**
      * Attempt to call the tool on a resolved handler instance.
      *
+     * NOTE FOR PLATFORM IMPLEMENTORS:
+     * This package passes `$arguments` as-is to the handler. If any tool argument
+     * contains a PHP array (e.g. `curriculum`, `tags`, `sections`), it is the
+     * platform handler's responsibility to serialize it before persisting to the
+     * database. The recommended approach is to add the relevant fields to the
+     * Eloquent model's `$casts` array (e.g. `'curriculum' => 'array'`), which
+     * makes Laravel handle JSON encoding/decoding automatically.
+     * Do NOT pass raw PHP arrays directly to DB insert/update calls.
+     *
      * @throws \RuntimeException
      */
     private function callOnHandler(mixed $handler, string $toolName, mixed $arguments): mixed
