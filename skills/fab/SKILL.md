@@ -1,14 +1,15 @@
 ---
 name: fab
-description: Direct access to fabiopacifici.com platform agent. Trigger any platform action — generate posts, courses, videos, LinkedIn sharing, community, reviews, debug — via natural language through the admin agent pipeline.
-version: 1.0.0
+description: Direct access to fabiopacifici.com platform agent. Trigger any platform action — generate posts, courses, videos, LinkedIn sharing, community, reviews, debug, manage content calendar — or run multi-step routines via natural language through the DevClaw agent pipeline.
+version: 1.1.0
 user-invokable: true
 commands:
   - /fab
+  - /routines
 metadata:
   platform_url: https://fabiopacifici.com
-  agent_endpoint: https://fabiopacifici.com/api/admin-agent/message
-  status_endpoint: https://fabiopacifici.com/api/admin-agent/{conversation_id}/status
+  agent_endpoint: https://fabiopacifici.com/api/devclaw/agent
+  status_endpoint: https://fabiopacifici.com/api/devclaw/agent/{conversation_id}/status
   token_env: DEVCLAW_TOKEN
 ---
 
@@ -21,36 +22,76 @@ Direct agent-to-agent interface with fabiopacifici.com. Same tools available in 
 ## Agent Instructions
 
 ### Authentication
-Token is stored in collective memory and workspace TOOLS.md.
-Always use: `Bearer 5dd2854e96b65ea855af3a97d0ac41d665a6181851bf96f880651eda49eb6791`
+Read the token from the `DEVCLAW_TOKEN` environment variable. Never hardcode credentials.
+
+```python
+import os
+TOKEN = os.environ["DEVCLAW_TOKEN"]
+```
 
 ### How to call the platform agent
 
-Send a natural language message with tool names to activate:
+Use the DevClaw agent endpoint. Send a natural language message with a list of tools the platform agent may invoke:
 
 ```python
-import requests, time
+import requests, time, os
 
-TOKEN = "5dd2854e96b65ea855af3a97d0ac41d665a6181851bf96f880651eda49eb6791"
-BASE = "https://fabiopacifici.com/api/admin-agent"
+TOKEN = os.environ["DEVCLAW_TOKEN"]
+BASE = "https://fabiopacifici.com/api/devclaw"
 HEADERS = {"Authorization": f"Bearer {TOKEN}", "Content-Type": "application/json"}
 
-# Send message
-r = requests.post(f"{BASE}/message", headers=HEADERS, json={
+# Send message — starts the agent loop
+r = requests.post(f"{BASE}/agent", headers=HEADERS, json={
     "message": "YOUR NATURAL LANGUAGE REQUEST",
     "tools": ["tool_name_here"]
 })
+r.raise_for_status()
 conv_id = r.json()["conversation_id"]
 
-# Poll result (wait ~10s for queued jobs)
+# Poll for result (tool jobs are queued; allow ~10s)
 time.sleep(10)
-status = requests.get(f"{BASE}/{conv_id}/status", headers=HEADERS).json()
+status = requests.get(f"{BASE}/agent/{conv_id}/status", headers=HEADERS).json()
 for msg in status["messages"]:
     if msg["role"] == "assistant":
         print(msg["content"])
 ```
 
-Or via exec_shell in routines.
+Or via `exec_shell` inside routines.
+
+---
+
+## `/routines` — Run Multi-Step Routines
+
+When `/routines` is invoked, display the menu below and wait for a button tap.
+
+**Message:**
+```
+⚙️ *fabiopacifici.com — Routines*
+Select a routine to run:
+```
+
+**Buttons (1 per row):**
+```json
+[
+  [{"text": "📚 Generate & Review Course", "callback_data": "routine_run_generate-and-review-course"}],
+  [{"text": "📝 Publish Next Post",         "callback_data": "routine_run_publish-next-post"}]
+]
+```
+
+### `routine_run_*` — Callback Rule (CRITICAL)
+
+> **Tapping a routine button is unconditional intent. Execute the routine immediately. No confirmation prompts. No recency checks. No "already ran this" logic.**
+
+When a `routine_run_<name>` callback arrives:
+
+1. Resolve `<name>` to the routine file in `routines/<name>/ROUTINE.md`.
+2. Execute the routine steps sequentially using the `fab` skill for any platform calls.
+3. Report the result to the user.
+
+```
+routine_run_generate-and-review-course  →  routines/generate-and-review-course/ROUTINE.md
+routine_run_publish-next-post           →  routines/publish-next-post/ROUTINE.md
+```
 
 ---
 
@@ -92,6 +133,7 @@ What would you like to do?
     {"text": "🐛 Debug Logs",            "callback_data": "fab_debug"}
   ],
   [
+    {"text": "📅 Content Calendar",      "callback_data": "fab_calendar"},
     {"text": "📊 Platform Stats",        "callback_data": "fab_stats"}
   ]
 ]
@@ -115,13 +157,14 @@ What would you like to do?
 | `fab_community_channels` | `community_list_channels` | List all channels. |
 | `fab_query_db` | `pacificdev_query_table` | Ask: "What data do you need? (table, filters, columns)" |
 | `fab_debug` | `pacificdev_agent_debug`, `pacificdev_agent_open_issue` | Run debug scan, show errors. Offer to open GitHub issue. |
+| `fab_calendar` | `manage_calendar` | Ask: "What calendar action? (list / create / update / delete entry)" Then call `manage_calendar` with the chosen action and params. |
 | `fab_stats` | `list_courses`, `list_posts`, `pacificdev_query_table` | Get counts: courses, posts, students. Show as summary. |
 
 ---
 
 ## Polling pattern
 
-After sending a message with tools, if `queued: true` — poll the status endpoint every 8-10 seconds until an assistant message with tool output appears.
+After sending a message via `POST /api/devclaw/agent`, if `queued: true` — poll `GET /api/devclaw/agent/{conversation_id}/status` every 8-10 seconds until an assistant message with tool output appears.
 
 Max wait: 60 seconds. If no result, report "job still running — check platform admin panel".
 
@@ -166,3 +209,6 @@ Students:
 Debug:
 - `pacificdev_agent_debug` — scan logs for errors
 - `pacificdev_agent_open_issue` — open GitHub issue for an error
+
+Calendar:
+- `manage_calendar` — CRUD operations on content calendar entries (list / create / update / delete)
