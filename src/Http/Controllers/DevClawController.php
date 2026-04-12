@@ -36,7 +36,7 @@ class DevClawController extends Controller
     public function chat(Request $request): JsonResponse
     {
         $request->validate([
-            'message' => 'required|string|max:32768',
+            'message' => 'required|string|max:1000000',
             'context' => 'sometimes|array',
             'history' => 'sometimes|array',
             'model'   => 'sometimes|nullable|string',
@@ -157,7 +157,7 @@ class DevClawController extends Controller
 
         // Fallback when the platform controller is not present (standalone / testing)
         $request->validate([
-            'message'         => 'required|string|max:32768',
+            'message'         => 'required|string|max:1000000',
             'conversation_id' => 'sometimes|nullable|integer',
             'model'           => 'sometimes|nullable|string',
         ]);
