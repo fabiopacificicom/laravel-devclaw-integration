@@ -15,6 +15,8 @@ class ContentCalendar extends Component
     #[Url]
     public string $currentDate = '';
 
+    public string $viewMode = 'grid';
+
     public bool $showModal = false;
 
     public array $editingEntry = [];
