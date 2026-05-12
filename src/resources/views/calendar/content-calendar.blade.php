@@ -54,7 +54,7 @@
 
             @if($mode === 'monthly')
                 @php
-                    $base = \Carbon\Carbon::createFromFormat('Y-m', $currentDate);
+                    $base = \Carbon\Carbon::createFromDate($year, $month, 1);
                     $startOfMonth = $base->copy()->startOfMonth();
                     $endOfMonth   = $base->copy()->endOfMonth();
                     $startGrid    = $startOfMonth->copy()->startOfWeek(\Carbon\Carbon::MONDAY);
@@ -102,7 +102,7 @@
 
             @elseif($mode === 'weekly')
                 @php
-                    $base = \Carbon\Carbon::createFromFormat('Y-m', $currentDate);
+                    $base = \Carbon\Carbon::createFromDate($year, $month, 1);
                     $weekStart = $base->copy()->startOfWeek(\Carbon\Carbon::MONDAY);
                     $weekEnd   = $weekStart->copy()->addDays(6);
                     $entriesByDay = collect($entries)->groupBy(fn($e) => \Carbon\Carbon::parse($e['scheduled_at'])->format('Y-m-d'));
@@ -136,7 +136,7 @@
 
             @elseif($mode === 'daily')
                 @php
-                    $base = \Carbon\Carbon::createFromFormat('Y-m', $currentDate);
+                    $base = \Carbon\Carbon::createFromDate($year, $month, 1);
                     $today = now()->format('Y-m-d');
                 @endphp
 
@@ -166,7 +166,7 @@
 
             @elseif($mode === 'multi-month')
                 @php
-                    $base = \Carbon\Carbon::createFromFormat('Y-m', $currentDate);
+                    $base = \Carbon\Carbon::createFromDate($year, $month, 1);
                     $entriesByDay = collect($entries)->groupBy(fn($e) => \Carbon\Carbon::parse($e['scheduled_at'])->format('Y-m-d'));
                 @endphp
 
@@ -218,7 +218,7 @@
         <div class="bg-white dark:bg-zinc-900 rounded-xl shadow-xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
             <div class="flex items-center justify-between p-6 border-b border-gray-200 dark:border-gray-700">
                 <h3 class="text-lg font-semibold text-gray-800 dark:text-gray-200">
-                    {{ empty($editingEntry['id']) ? 'New Entry' : 'Edit Entry' }}
+                    {{ $editingId === null ? 'New Entry' : 'Edit Entry' }}
                 </h3>
                 <button wire:click="$set('showModal', false)" class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300">
                     <svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
@@ -232,33 +232,33 @@
                 {{-- Title --}}
                 <div>
                     <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Title</label>
-                    <input type="text" wire:model="editingEntry.title"
+                    <input type="text" wire:model="title"
                         class="w-full rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-zinc-800 text-gray-900 dark:text-gray-100 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                         placeholder="Entry title">
-                    @error('editingEntry.title') <p class="text-red-500 text-xs mt-1">{{ $message }}</p> @enderror
+                    @error('title') <p class="text-red-500 text-xs mt-1">{{ $message }}</p> @enderror
                 </div>
 
                 {{-- Type + Status row --}}
                 <div class="grid grid-cols-2 gap-4">
                     <div>
                         <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Type</label>
-                        <select wire:model="editingEntry.type"
+                        <select wire:model="type"
                             class="w-full rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-zinc-800 text-gray-900 dark:text-gray-100 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
                             @foreach(['post','course','workshop','youtube_video','linkedin','other'] as $t)
                                 <option value="{{ $t }}">{{ ucfirst(str_replace('_', ' ', $t)) }}</option>
                             @endforeach
                         </select>
-                        @error('editingEntry.type') <p class="text-red-500 text-xs mt-1">{{ $message }}</p> @enderror
+                        @error('type') <p class="text-red-500 text-xs mt-1">{{ $message }}</p> @enderror
                     </div>
                     <div>
                         <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Status</label>
-                        <select wire:model="editingEntry.status"
+                        <select wire:model="status"
                             class="w-full rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-zinc-800 text-gray-900 dark:text-gray-100 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
                             @foreach(['draft','scheduled','published','cancelled'] as $s)
                                 <option value="{{ $s }}">{{ ucfirst($s) }}</option>
                             @endforeach
                         </select>
-                        @error('editingEntry.status') <p class="text-red-500 text-xs mt-1">{{ $message }}</p> @enderror
+                        @error('status') <p class="text-red-500 text-xs mt-1">{{ $message }}</p> @enderror
                     </div>
                 </div>
 
@@ -266,36 +266,36 @@
                 <div class="grid grid-cols-2 gap-4">
                     <div>
                         <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Scheduled At</label>
-                        <input type="datetime-local" wire:model="editingEntry.scheduled_at"
+                        <input type="datetime-local" wire:model="scheduled_at"
                             class="w-full rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-zinc-800 text-gray-900 dark:text-gray-100 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
-                        @error('editingEntry.scheduled_at') <p class="text-red-500 text-xs mt-1">{{ $message }}</p> @enderror
+                        @error('scheduled_at') <p class="text-red-500 text-xs mt-1">{{ $message }}</p> @enderror
                     </div>
                     <div>
                         <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Color</label>
                         <div class="flex items-center gap-2">
-                            <input type="color" wire:model="editingEntry.color"
+                            <input type="color" wire:model="color"
                                 class="h-9 w-12 rounded border border-gray-300 dark:border-gray-600 cursor-pointer">
-                            <input type="text" wire:model="editingEntry.color"
+                            <input type="text" wire:model="color"
                                 class="flex-1 rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-zinc-800 text-gray-900 dark:text-gray-100 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                                 maxlength="7" placeholder="#3b82f6">
                         </div>
-                        @error('editingEntry.color') <p class="text-red-500 text-xs mt-1">{{ $message }}</p> @enderror
+                        @error('color') <p class="text-red-500 text-xs mt-1">{{ $message }}</p> @enderror
                     </div>
                 </div>
 
                 {{-- Notes --}}
                 <div>
                     <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Notes</label>
-                    <textarea wire:model="editingEntry.notes" rows="3"
+                    <textarea wire:model="notes" rows="3"
                         class="w-full rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-zinc-800 text-gray-900 dark:text-gray-100 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                         placeholder="Optional notes..."></textarea>
-                    @error('editingEntry.notes') <p class="text-red-500 text-xs mt-1">{{ $message }}</p> @enderror
+                    @error('notes') <p class="text-red-500 text-xs mt-1">{{ $message }}</p> @enderror
                 </div>
 
                 {{-- Actions --}}
                 <div class="flex items-center justify-between pt-2">
-                    @if(!empty($editingEntry['id']))
-                        <button type="button" wire:click="delete({{ $editingEntry['id'] }})"
+                    @if($editingId !== null)
+                        <button type="button" wire:click="confirmDelete({{ $editingId }})"
                             wire:confirm="Delete this entry?"
                             class="px-4 py-2 rounded bg-red-100 hover:bg-red-200 dark:bg-red-900/30 dark:hover:bg-red-900/50 text-red-700 dark:text-red-400 text-sm font-medium">
                             Delete

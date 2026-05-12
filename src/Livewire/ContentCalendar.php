@@ -12,50 +12,80 @@ class ContentCalendar extends Component
     #[Url]
     public string $mode = 'monthly';
 
-    #[Url]
-    public string $currentDate = '';
-
     public string $viewMode = 'grid';
 
-    public bool $showModal = false;
+    public int $month;
+    public int $year;
 
-    public array $editingEntry = [];
+    public bool $showModal = false;
+    public bool $showDeleteConfirm = false;
+    public ?int $deleteId = null;
+
+    // Flat form fields
+    public ?int $editingId = null;
+    public string $title = '';
+    public string $type = 'post';
+    public string $status = 'draft';
+    public string $scheduled_at = '';
+    public string $color = '#3b82f6';
+    public string $notes = '';
 
     public array $entries = [];
 
     protected function rules(): array
     {
         return [
-            'editingEntry.title'        => 'required|string|max:255',
-            'editingEntry.type'         => 'required|in:post,course,workshop,youtube_video,linkedin,other',
-            'editingEntry.status'       => 'required|in:draft,scheduled,published,cancelled',
-            'editingEntry.scheduled_at' => 'required|date',
-            'editingEntry.color'        => 'nullable|string|max:7',
-            'editingEntry.notes'        => 'nullable|string',
+            'title'        => 'required|string|max:255',
+            'type'         => 'required|in:post,course,workshop,youtube_video,linkedin,other',
+            'status'       => 'required|in:draft,scheduled,published,cancelled',
+            'scheduled_at' => 'required|date',
+            'color'        => 'nullable|string|max:7',
+            'notes'        => 'nullable|string',
         ];
     }
 
     public function mount(): void
     {
-        if (empty($this->currentDate)) {
-            $this->currentDate = now()->format('Y-m');
-        }
+        $this->month = now()->month;
+        $this->year = now()->year;
         $this->entries = $this->getEntriesForRange();
     }
 
     public function navigate(string $direction): void
     {
-        $date = Carbon::createFromFormat('Y-m', $this->currentDate);
+        if ($direction === 'next') {
+            $this->nextMonth();
+        } else {
+            $this->previousMonth();
+        }
+    }
 
-        match ($this->mode) {
-            'daily'       => $direction === 'next' ? $date->addDay()   : $date->subDay(),
-            'weekly'      => $direction === 'next' ? $date->addWeek()  : $date->subWeek(),
-            'multi-month' => $direction === 'next' ? $date->addMonths(3) : $date->subMonths(3),
-            default       => $direction === 'next' ? $date->addMonth() : $date->subMonth(),
-        };
-
-        $this->currentDate = $date->format('Y-m');
+    public function nextMonth(): void
+    {
+        $date = Carbon::createFromDate($this->year, $this->month, 1)->addMonth();
+        $this->month = $date->month;
+        $this->year = $date->year;
         $this->entries = $this->getEntriesForRange();
+    }
+
+    public function previousMonth(): void
+    {
+        $date = Carbon::createFromDate($this->year, $this->month, 1)->subMonth();
+        $this->month = $date->month;
+        $this->year = $date->year;
+        $this->entries = $this->getEntriesForRange();
+    }
+
+    public function goToToday(): void
+    {
+        $this->month = now()->month;
+        $this->year = now()->year;
+        $this->entries = $this->getEntriesForRange();
+    }
+
+    public function goToday(): void
+    {
+        $this->goToToday();
     }
 
     public function setMode(string $mode): void
@@ -64,38 +94,28 @@ class ContentCalendar extends Component
         $this->entries = $this->getEntriesForRange();
     }
 
-    public function goToday(): void
-    {
-        $this->currentDate = now()->format('Y-m');
-        $this->entries = $this->getEntriesForRange();
-    }
-
     public function openCreate(string $date = ''): void
     {
-        $this->editingEntry = [
-            'id'           => null,
-            'title'        => '',
-            'type'         => 'post',
-            'status'       => 'draft',
-            'scheduled_at' => $date ?: now()->format('Y-m-d\TH:i'),
-            'color'        => '#3b82f6',
-            'notes'        => '',
-        ];
+        $this->editingId = null;
+        $this->title = '';
+        $this->type = 'post';
+        $this->status = 'draft';
+        $this->scheduled_at = $date ?: now()->format('Y-m-d\TH:i');
+        $this->color = '#3b82f6';
+        $this->notes = '';
         $this->showModal = true;
     }
 
     public function openEdit(int $id): void
     {
         $entry = CalendarEntry::findOrFail($id);
-        $this->editingEntry = [
-            'id'           => $entry->id,
-            'title'        => $entry->title,
-            'type'         => $entry->type,
-            'status'       => $entry->status,
-            'scheduled_at' => $entry->scheduled_at->format('Y-m-d\TH:i'),
-            'color'        => $entry->color,
-            'notes'        => $entry->notes ?? '',
-        ];
+        $this->editingId = $entry->id;
+        $this->title = $entry->title;
+        $this->type = $entry->type;
+        $this->status = $entry->status;
+        $this->scheduled_at = $entry->scheduled_at->format('Y-m-d\TH:i');
+        $this->color = $entry->color;
+        $this->notes = $entry->notes ?? '';
         $this->showModal = true;
     }
 
@@ -104,52 +124,58 @@ class ContentCalendar extends Component
         $this->validate();
 
         $data = [
-            'title'        => $this->editingEntry['title'],
-            'type'         => $this->editingEntry['type'],
-            'status'       => $this->editingEntry['status'],
-            'scheduled_at' => $this->editingEntry['scheduled_at'],
-            'color'        => $this->editingEntry['color'] ?? '#3b82f6',
-            'notes'        => $this->editingEntry['notes'] ?? null,
+            'title'        => $this->title,
+            'type'         => $this->type,
+            'status'       => $this->status,
+            'scheduled_at' => $this->scheduled_at,
+            'color'        => $this->color ?: '#3b82f6',
+            'notes'        => $this->notes ?: null,
         ];
 
-        if (!empty($this->editingEntry['id'])) {
-            CalendarEntry::findOrFail($this->editingEntry['id'])->update($data);
+        if ($this->editingId) {
+            CalendarEntry::findOrFail($this->editingId)->update($data);
         } else {
             CalendarEntry::create($data);
         }
 
         $this->showModal = false;
-        $this->editingEntry = [];
+        $this->editingId = null;
+        $this->title = '';
         $this->entries = $this->getEntriesForRange();
     }
 
-    public function delete(int $id): void
+    public function confirmDelete(int $id): void
     {
-        CalendarEntry::findOrFail($id)->delete();
+        $this->deleteId = $id;
+        $this->showDeleteConfirm = true;
+    }
+
+    public function delete(): void
+    {
+        if ($this->deleteId) {
+            CalendarEntry::findOrFail($this->deleteId)->delete();
+        }
+        $this->deleteId = null;
+        $this->showDeleteConfirm = false;
         $this->showModal = false;
-        $this->editingEntry = [];
         $this->entries = $this->getEntriesForRange();
     }
 
     public function getEntriesForRange(): array
     {
-        [$from, $to] = $this->resolveRange();
-        return CalendarEntry::inRange($from, $to)
-            ->orderBy('scheduled_at')
-            ->get()
-            ->toArray();
-    }
+        $base = Carbon::createFromDate($this->year ?? now()->year, $this->month ?? now()->month, 1);
 
-    private function resolveRange(): array
-    {
-        $base = Carbon::createFromFormat('Y-m', $this->currentDate ?: now()->format('Y-m'));
-
-        return match ($this->mode) {
+        [$from, $to] = match ($this->mode) {
             'daily'       => [$base->copy()->startOfDay(), $base->copy()->endOfDay()],
             'weekly'      => [$base->copy()->startOfWeek(), $base->copy()->endOfWeek()],
             'multi-month' => [$base->copy()->startOfMonth(), $base->copy()->addMonths(2)->endOfMonth()],
             default       => [$base->copy()->startOfMonth(), $base->copy()->endOfMonth()],
         };
+
+        return CalendarEntry::inRange($from, $to)
+            ->orderBy('scheduled_at')
+            ->get()
+            ->toArray();
     }
 
     public function render()
